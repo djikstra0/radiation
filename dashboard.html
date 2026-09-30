@@ -1,0 +1,298 @@
+<!DOCTYPE html>
+<html lang="sr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Praćenje radijacije - Realtime</title>
+    
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 20px;
+            background-color: #f4f4f9;
+        }
+
+        h1 {
+            text-align: center;
+            color: #333;
+            margin-bottom: 5px;
+        }
+
+        /* Trenutno vreme */
+        #current-time {
+            text-align: center;
+            font-size: 18px;
+            color: #666;
+            margin-bottom: 20px;
+            font-family: monospace;
+        }
+        
+        .container {
+            display: flex;
+            gap: 20px;
+            flex-wrap: wrap;
+        }
+        
+        /* Stilovi za mapu */
+        #map {
+            height: 600px;
+            width: 60%;
+            border-radius: 8px;
+            box-shadow: 0 4px 8px rgba(0,0,0,0.1);
+        }
+        
+        /* Stilovi za tabelu */
+        .data-panel {
+            width: 35%;
+            flex-grow: 1;
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 4px 8px rgba(0,0,0,0.1);
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 15px;
+        }
+
+        th, td {
+            text-align: left;
+            padding: 12px;
+            border-bottom: 1px solid #ddd;
+        }
+
+        th {
+            background-color: #007bff;
+            color: white;
+        }
+        
+        /* Statusne boje teksta u tabeli */
+        .status-ok {
+            color: #28a745;
+            font-weight: bold;
+        }
+
+        .status-warn {
+            color: #ffc107;
+            font-weight: bold;
+        }
+
+        .status-danger {
+            color: #dc3545;
+            font-weight: bold;
+        }
+    </style>
+</head>
+
+<body>
+
+    <h1>Mreža za praćenje radijacije</h1>
+
+    <div id="current-time">00:00:00</div>
+
+    <div class="container">
+
+        <div id="map"></div>
+
+        <div class="data-panel">
+            <h2>Poslednja očitavanja</h2>
+
+            <table>
+                <thead>
+                    <tr>
+                        <th>Grad</th>
+                        <th>Vreme merenja</th>
+                        <th>Radijacija (µSv/h)</th>
+                    </tr>
+                </thead>
+
+                <tbody id="table-body">
+                </tbody>
+            </table>
+        </div>
+
+    </div>
+
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+
+    <script>
+
+        // =========================================================
+        // Trenutno vreme
+        // =========================================================
+
+        function updateClock() {
+            const now = new Date();
+
+            const hours = String(now.getHours()).padStart(2, '0');
+            const minutes = String(now.getMinutes()).padStart(2, '0');
+            const seconds = String(now.getSeconds()).padStart(2, '0');
+
+            document.getElementById('current-time').textContent =
+                `${hours}:${minutes}:${seconds}`;
+        }
+
+        // Prikazi vreme odmah
+        updateClock();
+
+        // Azuriraj vreme svake sekunde
+        setInterval(updateClock, 1000);
+
+
+        // =========================================================
+        // Inicijalizacija mape
+        // =========================================================
+
+        // Inicijalizacija mape, centrirano na Srbiju
+        var map = L.map('map').setView([44.2, 20.9], 7);
+
+        // Dodavanje OpenStreetMap sloja
+        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+            maxZoom: 18,
+            attribution: '© OpenStreetMap'
+        }).addTo(map);
+
+        // Grupa (Layer) za markere kako bi lako mogli da ih brišemo
+        // i crtamo nove
+        var markersLayer = L.layerGroup().addTo(map);
+
+
+        // =========================================================
+        // Status radijacije
+        // =========================================================
+
+        // Funkcija za određivanje boje i CSS klase
+        // na osnovu nivoa radijacije i praga lokacije
+        function getStatus(usv, threshold) {
+
+            // Žuta zona počinje na 80% definisanog praga
+            const warningThreshold = threshold * 0.8;
+
+            // Normalan nivo
+            if (usv < warningThreshold) {
+                return {
+                    color: 'green',
+                    css: 'status-ok'
+                };
+            }
+
+            // Povišen nivo, ali ispod praga
+            if (usv < threshold) {
+                return {
+                    color: '#ffcc00',
+                    css: 'status-warn'
+                };
+            }
+
+            // Prekoračen prag
+            return {
+                color: 'red',
+                css: 'status-danger'
+            };
+        }
+
+
+        // =========================================================
+        // Dohvatanje i prikaz podataka
+        // =========================================================
+
+        function fetchData() {
+
+            fetch('/api/realtime')
+
+                .then(response => response.json())
+
+                .then(data => {
+
+                    // Očisti stare markere
+                    // i staru tabelu
+                    markersLayer.clearLayers();
+
+                    const tableBody =
+                        document.getElementById('table-body');
+
+                    tableBody.innerHTML = '';
+
+
+                    // Prolazak kroz svaki grad
+                    // koji je vraćen iz baze
+                    data.forEach(row => {
+
+                        let status =
+                            getStatus(row.usv, row.threshold);
+
+
+                        // -------------------------------------------------
+                        // Crtanje kružića na mapi
+                        // -------------------------------------------------
+
+                        var circle = L.circleMarker(
+                            [row.latitude, row.longitude],
+                            {
+                                radius: 12,
+                                fillColor: status.color,
+                                color: '#000',
+                                weight: 1,
+                                opacity: 1,
+                                fillOpacity: 0.8
+                            }
+                        ).addTo(markersLayer);
+
+
+                        // Popup kada se klikne na kružić
+                        circle.bindPopup(
+                            `<b>${row.city}</b><br>` +
+                            `Vreme: ${new Date(row.measurement_time).toLocaleTimeString()}<br>` +
+                            `Vrednost: ${row.usv} µSv/h`
+                        );
+
+
+                        // -------------------------------------------------
+                        // Dodavanje reda u tabelu
+                        // -------------------------------------------------
+
+                        let formattedTime =
+                            new Date(row.measurement_time)
+                                .toLocaleString('sr-RS');
+
+                        let tr = document.createElement('tr');
+
+                        tr.innerHTML = `
+                            <td>${row.city}</td>
+                            <td>${formattedTime}</td>
+                            <td class="${status.css}">
+                                ${row.usv}
+                            </td>
+                        `;
+
+                        tableBody.appendChild(tr);
+                    });
+                })
+
+                .catch(err =>
+                    console.error(
+                        "Greška pri dohvatanju podataka: ",
+                        err
+                    )
+                );
+        }
+
+
+        // =========================================================
+        // Automatsko osvežavanje podataka
+        // =========================================================
+
+        // Pozovi odmah pri učitavanju stranice
+        fetchData();
+
+        // Ponavljaj svakih 5 sekundi
+        setInterval(fetchData, 5000);
+
+    </script>
+
+</body>
+</html>
